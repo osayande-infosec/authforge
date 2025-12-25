@@ -1,0 +1,47 @@
+name = "authforge"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "authforge-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# Cloudflare KV for sessions & rate limiting
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "YOUR_RATE_LIMIT_KV_ID"
+
+# Environment variables (set via wrangler secret)
+# JWT_SECRET - for signing tokens
+# WEBAUTHN_RP_ID - your domain (e.g., authforge.cyberguardng.ca)
+# WEBAUTHN_RP_NAME - AuthForge
+# GOOGLE_CLIENT_ID - for OAuth
+# GOOGLE_CLIENT_SECRET - for OAuth
+# SMTP_HOST - for magic links
+# SMTP_USER
+# SMTP_PASS
+# SMTP_FROM
+
+[vars]
+WEBAUTHN_RP_NAME = "AuthForge"
+ALLOWED_ORIGINS = "http://localhost:5173,https://authforge.cyberguardng.ca"
+
+# Routes - serve API from /api/*
+# [[routes]]
+# pattern = "authforge.cyberguardng.ca/api/*"
+# zone_name = "cyberguardng.ca"
+
+# Development
+[dev]
+port = 8787
+
+# Production environment
+[env.production]
+vars = { ENVIRONMENT = "production" }
