@@ -6,6 +6,7 @@ export interface User {
   email: string;
   name: string | null;
   avatarUrl: string | null;
+  createdAt?: string;
   emailVerified: boolean;
   has2FA: boolean;
   hasPassword: boolean;
@@ -62,13 +63,6 @@ export const useAuthStore = create<AuthState>()(
 
 // API client
 const API_BASE = '/api';
-
-interface ApiResponse<T> {
-  success: boolean;
-  error?: string;
-  message?: string;
-  data?: T;
-}
 
 export async function api<T>(
   endpoint: string,

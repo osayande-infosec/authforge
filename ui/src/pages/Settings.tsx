@@ -15,7 +15,7 @@ export default function Settings() {
   const [isLoading, setIsLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  const { register, handleSubmit, formState: { errors, isDirty } } = useForm<ProfileForm>({
+  const { register, handleSubmit, formState: { isDirty } } = useForm<ProfileForm>({
     defaultValues: {
       name: user?.name || '',
       email: user?.email || ''

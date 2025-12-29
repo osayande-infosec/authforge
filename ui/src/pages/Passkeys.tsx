@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Key, Plus, Trash2, Fingerprint } from 'lucide-react';
+import { Key, Plus, Fingerprint } from 'lucide-react';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 

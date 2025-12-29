@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 
 export default function Sessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>('');
+  const [_currentSessionId, setCurrentSessionId] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {

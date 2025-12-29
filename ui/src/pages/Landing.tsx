@@ -106,7 +106,7 @@ export default function Landing() {
                 <ArrowRight className="w-5 h-5" />
               </Link>
               <a 
-                href="https://github.com/cyberguardng/authforge" 
+                href="https://github.com/osayande-infosec/authforge" 
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-secondary px-8 py-3 text-base"

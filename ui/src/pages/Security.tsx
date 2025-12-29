@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Shield, Smartphone, Key, AlertTriangle, Check } from 'lucide-react';
+import { Smartphone, Key, AlertTriangle, Check } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthStore, authApi } from '../store';
 import toast from 'react-hot-toast';

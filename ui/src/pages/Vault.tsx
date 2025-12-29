@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Lock, Plus, Search, Folder, Key, CreditCard, FileText, User } from 'lucide-react';
+import { Lock, Plus, Search, Key, CreditCard, FileText, User } from 'lucide-react';
 import { useState } from 'react';
 
 const itemTypes = [
