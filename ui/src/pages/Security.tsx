@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
-import { Smartphone, Key, AlertTriangle, Check } from 'lucide-react';
+import { Smartphone, Key, AlertTriangle, Check, Mail } from 'lucide-react';
 import { useState } from 'react';
-import { useAuthStore, authApi } from '../store';
+import { useAuthStore, authApi, userApi } from '../store';
 import toast from 'react-hot-toast';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -12,6 +12,12 @@ export default function Security() {
   const [verifyCode, setVerifyCode] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Password modal state
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const handleSetup2FA = async () => {
     setIsLoading(true);
@@ -68,6 +74,35 @@ export default function Security() {
     }
   };
 
+  const handleSetPassword = async () => {
+    if (newPassword !== confirmPassword) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      // Only send currentPassword if user already has one
+      await userApi.changePassword(user?.hasPassword ? currentPassword : undefined, newPassword);
+      if (user) {
+        setUser({ ...user, hasPassword: true });
+      }
+      toast.success(user?.hasPassword ? 'Password changed!' : 'Password set!');
+      setShowPasswordModal(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to set password');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <motion.div
@@ -76,6 +111,56 @@ export default function Security() {
       >
         <h1 className="text-2xl font-bold text-white">Security</h1>
         <p className="text-dark-400">Manage your account security settings</p>
+      </motion.div>
+
+      {/* Email Verification Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05 }}
+        className="card"
+      >
+        <div className="flex items-start justify-between">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <Mail className="w-6 h-6 text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Email Verification</h2>
+              <p className="text-dark-400 text-sm mt-1">
+                Verify your email address to enable all features
+              </p>
+              <div className={`inline-flex items-center gap-1.5 mt-3 text-sm ${user?.emailVerified ? 'text-green-400' : 'text-amber-400'}`}>
+                {user?.emailVerified ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                {user?.emailVerified ? 'Verified' : 'Not verified'}
+              </div>
+            </div>
+          </div>
+          
+          {!user?.emailVerified && (
+            <button
+              onClick={async () => {
+                setIsLoading(true);
+                try {
+                  const result = await userApi.requestEmailVerification();
+                  if (result.devMode) {
+                    toast.success('Check server console for verification link!', { duration: 5000 });
+                  } else {
+                    toast.success('Verification email sent! Check your inbox.');
+                  }
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Failed to send verification email');
+                } finally {
+                  setIsLoading(false);
+                }
+              }}
+              disabled={isLoading}
+              className="btn-primary"
+            >
+              Send Verification Email
+            </button>
+          )}
+        </div>
       </motion.div>
 
       {/* 2FA Card */}
@@ -229,11 +314,86 @@ export default function Security() {
               {user?.hasPassword ? 'Change your password' : 'Set a password for your account'}
             </p>
           </div>
-          <button className="btn-secondary">
+          <button onClick={() => setShowPasswordModal(true)} className="btn-secondary">
             {user?.hasPassword ? 'Change' : 'Set Password'}
           </button>
         </div>
       </motion.div>
+
+      {/* Password Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-dark-900 border border-dark-700 rounded-2xl p-6 w-full max-w-md mx-4"
+          >
+            <h3 className="text-xl font-semibold text-white mb-4">
+              {user?.hasPassword ? 'Change Password' : 'Set Password'}
+            </h3>
+            
+            {user?.hasPassword && (
+              <div className="mb-4">
+                <label className="block text-dark-300 text-sm mb-2">Current Password</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="input"
+                  placeholder="Enter current password"
+                />
+              </div>
+            )}
+            
+            <div className="mb-4">
+              <label className="block text-dark-300 text-sm mb-2">New Password</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="input"
+                placeholder="Enter new password"
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-dark-300 text-sm mb-2">Confirm Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="input"
+                placeholder="Confirm new password"
+              />
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setCurrentPassword('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSetPassword}
+                disabled={isLoading || !newPassword || !confirmPassword}
+                className="btn-primary flex-1"
+              >
+                {isLoading ? (
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  user?.hasPassword ? 'Change Password' : 'Set Password'
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

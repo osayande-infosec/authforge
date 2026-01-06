@@ -104,6 +104,8 @@ GET  /users/me              - Get current user
 PATCH /users/me             - Update profile
 POST /users/me/email        - Change email
 POST /users/me/password     - Change password
+POST /users/me/verify-email - Request email verification
+GET  /users/verify-email    - Verify email with token
 POST /users/password-reset  - Request password reset
 GET  /users/me/audit-log    - Get audit log
 DELETE /users/me            - Delete account
@@ -152,14 +154,33 @@ npm run deploy
 WEBAUTHN_RP_ID = "yourdomain.com"
 WEBAUTHN_RP_NAME = "AuthForge"
 WEBAUTHN_ORIGIN = "https://yourdomain.com"
-JWT_SECRET = "your-secret-key"
+EMAIL_FROM = "AuthForge <noreply@yourdomain.com>"
 
 # Secrets (set via wrangler secret put)
+# JWT_SECRET       - Signing key for JWTs
+# RESEND_API_KEY   - Email delivery via Resend (https://resend.com)
 # GOOGLE_CLIENT_ID
 # GOOGLE_CLIENT_SECRET
 # GITHUB_CLIENT_ID
 # GITHUB_CLIENT_SECRET
 ```
+
+### Email Service Setup (Resend)
+
+AuthForge uses [Resend](https://resend.com) for transactional emails:
+
+1. Create a free account at [resend.com](https://resend.com)
+2. Verify your domain or use Resend's test domain
+3. Generate an API key
+4. Add the secret to Cloudflare:
+   ```bash
+   npx wrangler secret put RESEND_API_KEY
+   ```
+
+Email templates are in [src/lib/email.ts](src/lib/email.ts):
+- **Email Verification** - Branded HTML + plain text
+- **Password Reset** - Security-focused messaging
+- **Magic Links** - Passwordless login
 
 ## 📁 Project Structure
 

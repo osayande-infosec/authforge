@@ -139,6 +139,30 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- OAuth/OIDC Clients (for enterprise SSO integration)
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id TEXT PRIMARY KEY,
+  client_id TEXT UNIQUE NOT NULL,
+  client_secret TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  logo_url TEXT,
+  redirect_uris TEXT NOT NULL, -- JSON array
+  grant_types TEXT DEFAULT '["authorization_code"]', -- JSON array
+  response_types TEXT DEFAULT '["code"]', -- JSON array
+  scopes TEXT DEFAULT '["openid", "profile", "email"]', -- JSON array
+  application_type TEXT DEFAULT 'web' CHECK(application_type IN ('web', 'native', 'spa')),
+  token_endpoint_auth_method TEXT DEFAULT 'client_secret_basic',
+  contacts TEXT, -- JSON array of emails
+  policy_uri TEXT,
+  tos_uri TEXT,
+  jwks_uri TEXT,
+  status TEXT DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'deleted')),
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);

@@ -3,12 +3,12 @@
 import { Hono } from 'hono';
 import { Env, VaultItem, VaultFolder } from '../types';
 import { generateId, sha256, logAudit } from '../lib/utils';
-import { requireAuth, requireVerified } from '../lib/middleware';
+import { requireAuth, requireVerified, requireCSRF } from '../lib/middleware';
 
 const vault = new Hono<{ Bindings: Env }>();
 
-// All vault routes require authentication and verified email
-vault.use('*', requireAuth, requireVerified);
+// All vault routes require authentication
+vault.use('*', requireAuth);
 
 /*
  * VAULT ARCHITECTURE:
@@ -17,6 +17,66 @@ vault.use('*', requireAuth, requireVerified);
  * - Server never sees plaintext passwords/notes/cards
  * - User's vault key is derived from their master password
  */
+
+// Setup vault (store salt and verification hash)
+vault.post('/setup', requireCSRF(), async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{
+    salt: string;
+    verificationHash: string;
+  }>();
+
+  if (!body.salt || !body.verificationHash) {
+    return c.json({ error: 'Salt and verification hash are required' }, 400);
+  }
+
+  // Check if vault is already set up
+  const existing = await c.env.DB.prepare(
+    'SELECT vault_key FROM users WHERE id = ?'
+  ).bind(user.id).first<{ vault_key: string | null }>();
+
+  if (existing?.vault_key) {
+    return c.json({ error: 'Vault already set up' }, 400);
+  }
+
+  // Store salt and verification hash combined
+  const vaultData = JSON.stringify({
+    salt: body.salt,
+    verificationHash: body.verificationHash
+  });
+
+  await c.env.DB.prepare(
+    'UPDATE users SET vault_key = ? WHERE id = ?'
+  ).bind(vaultData, user.id).run();
+
+  await logAudit(c.env.DB, 'vault.setup', user.id, c.req.raw, {});
+
+  return c.json({ success: true, message: 'Vault created' });
+});
+
+// Get vault salt (for unlocking)
+vault.get('/salt', async (c) => {
+  const user = c.get('user');
+
+  const result = await c.env.DB.prepare(
+    'SELECT vault_key FROM users WHERE id = ?'
+  ).bind(user.id).first<{ vault_key: string | null }>();
+
+  if (!result?.vault_key) {
+    return c.json({ error: 'Vault not set up' }, 404);
+  }
+
+  try {
+    const vaultData = JSON.parse(result.vault_key);
+    return c.json({
+      success: true,
+      salt: vaultData.salt,
+      verificationHash: vaultData.verificationHash
+    });
+  } catch {
+    return c.json({ error: 'Invalid vault data' }, 500);
+  }
+});
 
 // List vault items
 vault.get('/items', async (c) => {
@@ -88,8 +148,8 @@ vault.get('/items/:id', async (c) => {
       type: item.type,
       name: item.name,
       encryptedData: item.encrypted_data,
+      iv: item.iv,
       favorite: item.favorite === 1,
-      notes: item.notes,
       createdAt: item.created_at,
       updatedAt: item.updated_at
     }
@@ -97,12 +157,13 @@ vault.get('/items/:id', async (c) => {
 });
 
 // Create vault item
-vault.post('/items', async (c) => {
+vault.post('/items', requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{
     type: 'login' | 'note' | 'card' | 'identity';
     name: string;
     encryptedData: string;
+    iv?: string;
     folderId?: string;
     favorite?: boolean;
     notes?: string;
@@ -112,8 +173,17 @@ vault.post('/items', async (c) => {
     return c.json({ error: 'Type, name, and encryptedData are required' }, 400);
   }
 
-  const validTypes = ['login', 'note', 'card', 'identity'];
-  if (!validTypes.includes(body.type)) {
+  // Schema uses 'password' not 'login' for type
+  const typeMap: Record<string, string> = {
+    'login': 'password',
+    'password': 'password',
+    'note': 'note',
+    'card': 'card',
+    'identity': 'identity'
+  };
+  const dbType = typeMap[body.type] || body.type;
+  const validTypes = ['password', 'note', 'card', 'identity'];
+  if (!validTypes.includes(dbType)) {
     return c.json({ error: 'Invalid item type' }, 400);
   }
 
@@ -129,18 +199,21 @@ vault.post('/items', async (c) => {
   }
 
   const itemId = generateId();
+  // Use client-provided IV or generate a random one
+  const iv = body.iv || crypto.randomUUID().replace(/-/g, '').slice(0, 24);
+  
   await c.env.DB.prepare(`
-    INSERT INTO vault_items (id, user_id, folder_id, type, name, encrypted_data, favorite, notes)
+    INSERT INTO vault_items (id, user_id, folder_id, type, name, encrypted_data, iv, favorite)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     itemId,
     user.id,
     body.folderId || null,
-    body.type,
+    dbType,
     body.name,
     body.encryptedData,
-    body.favorite ? 1 : 0,
-    body.notes || null
+    iv,
+    body.favorite ? 1 : 0
   ).run();
 
   await logAudit(c.env.DB, 'vault.item.created', user.id, c.req.raw, { itemId, type: body.type });
@@ -153,7 +226,7 @@ vault.post('/items', async (c) => {
 });
 
 // Update vault item
-vault.put('/items/:id', async (c) => {
+vault.put('/items/:id', requireCSRF(), async (c) => {
   const user = c.get('user');
   const itemId = c.req.param('id');
   const body = await c.req.json<{
@@ -213,7 +286,7 @@ vault.put('/items/:id', async (c) => {
 });
 
 // Delete vault item
-vault.delete('/items/:id', async (c) => {
+vault.delete('/items/:id', requireCSRF(), async (c) => {
   const user = c.get('user');
   const itemId = c.req.param('id');
 
@@ -267,7 +340,7 @@ vault.get('/folders', async (c) => {
 });
 
 // Create folder
-vault.post('/folders', async (c) => {
+vault.post('/folders', requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ name: string; parentId?: string }>();
 
@@ -300,7 +373,7 @@ vault.post('/folders', async (c) => {
 });
 
 // Rename folder
-vault.patch('/folders/:id', async (c) => {
+vault.patch('/folders/:id', requireCSRF(), async (c) => {
   const user = c.get('user');
   const folderId = c.req.param('id');
   const body = await c.req.json<{ name: string }>();
@@ -321,7 +394,7 @@ vault.patch('/folders/:id', async (c) => {
 });
 
 // Delete folder (moves items to unfiled)
-vault.delete('/folders/:id', async (c) => {
+vault.delete('/folders/:id', requireCSRF(), async (c) => {
   const user = c.get('user');
   const folderId = c.req.param('id');
 
@@ -363,7 +436,7 @@ vault.get('/status', async (c) => {
 });
 
 // Set/update vault key (encrypted master key)
-vault.post('/key', async (c) => {
+vault.post('/key', requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ encryptedKey: string }>();
 
@@ -407,7 +480,7 @@ vault.get('/export', async (c) => {
 });
 
 // Import vault (encrypted)
-vault.post('/import', async (c) => {
+vault.post('/import', requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{
     folders: VaultFolder[];

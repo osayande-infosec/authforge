@@ -19,12 +19,9 @@ export interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
 
-  // Email
-  SMTP_HOST?: string;
-  SMTP_PORT?: string;
-  SMTP_USER?: string;
-  SMTP_PASS?: string;
-  SMTP_FROM?: string;
+  // Email (Resend)
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
 }
 
 export interface User {

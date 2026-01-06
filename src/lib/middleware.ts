@@ -2,7 +2,28 @@
 
 import { Context, Next } from 'hono';
 import { Env, User, Session } from '../types';
-import { getSessionByToken, checkRateLimit } from './utils';
+import { getSessionByToken, checkRateLimit, generateToken, sha256 } from './utils';
+
+// Get trusted client IP - only trust CF-Connecting-IP when behind Cloudflare
+// Falls back to connection info, NEVER trusts X-Forwarded-For or X-Real-IP
+function getTrustedClientIP(c: Context<{ Bindings: Env }>): string {
+  // In production on Cloudflare, CF-Connecting-IP is set by Cloudflare and cannot be spoofed
+  // In development, we fall back to a hash of user-agent + origin as a fingerprint
+  const cfIP = c.req.header('CF-Connecting-IP');
+  
+  // Check if we're running on Cloudflare (has CF-Ray header)
+  const isCloudflare = !!c.req.header('CF-Ray');
+  
+  if (isCloudflare && cfIP) {
+    return cfIP;
+  }
+  
+  // Fallback: create a fingerprint from available non-spoofable data
+  // This is less reliable but prevents trivial bypass in dev
+  const userAgent = c.req.header('User-Agent') || '';
+  const origin = c.req.header('Origin') || c.req.header('Host') || '';
+  return `fingerprint:${userAgent.slice(0, 50)}:${origin}`;
+}
 
 // Extend Hono context with auth data
 declare module 'hono' {
@@ -84,9 +105,10 @@ export async function optionalAuth(c: Context<{ Bindings: Env }>, next: Next) {
 }
 
 // Rate limiting middleware factory
-export function rateLimit(limit: number, windowSeconds: number, keyFn?: (c: Context) => string) {
+// SECURITY: Only uses trusted IP sources to prevent header manipulation bypass
+export function rateLimit(limit: number, windowSeconds: number, keyFn?: (c: Context<{ Bindings: Env }>) => string) {
   return async (c: Context<{ Bindings: Env }>, next: Next) => {
-    const key = keyFn ? keyFn(c) : (c.req.header('CF-Connecting-IP') || 'anonymous');
+    const key = keyFn ? keyFn(c) : getTrustedClientIP(c);
     const endpoint = new URL(c.req.url).pathname;
     
     const result = await checkRateLimit(
@@ -145,4 +167,70 @@ export async function require2FA(c: Context<{ Bindings: Env }>, next: Next) {
   }
 
   await next();
+}
+// ============================================
+// CSRF Protection
+// ============================================
+// Double-submit cookie pattern: client must send token in both cookie and header
+
+// Generate CSRF token for a session
+export async function generateCSRFToken(c: Context<{ Bindings: Env }>): Promise<string> {
+  const session = c.get('session');
+  if (!session) {
+    throw new Error('Session required for CSRF token');
+  }
+  
+  const token = generateToken();
+  const tokenHash = await sha256(token);
+  
+  // Store token hash linked to session (expires with session)
+  await c.env.SESSIONS.put(`csrf:${session.id}`, tokenHash, {
+    expirationTtl: 7 * 24 * 60 * 60 // Same as session TTL
+  });
+  
+  return token;
+}
+
+// CSRF validation middleware for state-changing operations
+export function requireCSRF() {
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
+    const session = c.get('session');
+    if (!session) {
+      return c.json({ error: 'Unauthorized', message: 'Session required' }, 401);
+    }
+    
+    // Get CSRF token from header (X-CSRF-Token) or body
+    const headerToken = c.req.header('X-CSRF-Token');
+    const bodyToken = c.req.header('Content-Type')?.includes('application/json')
+      ? (await c.req.json().catch(() => ({}))).csrfToken
+      : null;
+    
+    const clientToken = headerToken || bodyToken;
+    
+    if (!clientToken) {
+      return c.json({ 
+        error: 'CSRF Token Missing', 
+        message: 'X-CSRF-Token header required for this request' 
+      }, 403);
+    }
+    
+    // Verify token against stored hash
+    const storedHash = await c.env.SESSIONS.get(`csrf:${session.id}`);
+    if (!storedHash) {
+      return c.json({ 
+        error: 'CSRF Token Invalid', 
+        message: 'Please refresh and try again' 
+      }, 403);
+    }
+    
+    const clientTokenHash = await sha256(clientToken);
+    if (clientTokenHash !== storedHash) {
+      return c.json({ 
+        error: 'CSRF Token Mismatch', 
+        message: 'Security token invalid. Please refresh and try again.' 
+      }, 403);
+    }
+    
+    await next();
+  };
 }

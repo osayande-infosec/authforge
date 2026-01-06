@@ -13,7 +13,7 @@ import {
   isValidEmail,
   validatePassword
 } from '../lib/utils';
-import { requireAuth, rateLimit } from '../lib/middleware';
+import { requireAuth, rateLimit, requireCSRF } from '../lib/middleware';
 import { TOTP, Secret } from 'otpauth';
 import QRCode from 'qrcode';
 
@@ -360,7 +360,7 @@ auth.post('/logout', requireAuth, async (c) => {
 });
 
 // Setup 2FA
-auth.post('/2fa/setup', requireAuth, async (c) => {
+auth.post('/2fa/setup', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
 
   if (user.totp_enabled) {
@@ -378,9 +378,11 @@ auth.post('/2fa/setup', requireAuth, async (c) => {
   // Store secret temporarily (not enabled yet)
   await c.env.SESSIONS.put(`2fa_setup:${user.id}`, secret.base32, { expirationTtl: 600 });
 
-  // Generate QR code
+  // Generate QR code as SVG (compatible with Cloudflare Workers - no canvas needed)
   const otpauthUrl = totp.toString();
-  const qrCode = await QRCode.toDataURL(otpauthUrl);
+  const qrCodeSvg = await QRCode.toString(otpauthUrl, { type: 'svg' });
+  // Convert SVG to data URL for frontend compatibility
+  const qrCode = `data:image/svg+xml;base64,${btoa(qrCodeSvg)}`;
 
   return c.json({
     success: true,
@@ -391,7 +393,7 @@ auth.post('/2fa/setup', requireAuth, async (c) => {
 });
 
 // Verify and enable 2FA
-auth.post('/2fa/verify', requireAuth, async (c) => {
+auth.post('/2fa/verify', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ code: string }>();
   const { code } = body;
@@ -442,7 +444,7 @@ auth.post('/2fa/verify', requireAuth, async (c) => {
 });
 
 // Disable 2FA
-auth.post('/2fa/disable', requireAuth, async (c) => {
+auth.post('/2fa/disable', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ code: string }>();
   const { code } = body;

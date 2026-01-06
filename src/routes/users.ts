@@ -3,7 +3,8 @@
 import { Hono } from 'hono';
 import { Env, User, AuditLog } from '../types';
 import { generateId, hashPassword, verifyPassword, isValidEmail, validatePassword, logAudit } from '../lib/utils';
-import { requireAuth, rateLimit } from '../lib/middleware';
+import { requireAuth, rateLimit, requireCSRF } from '../lib/middleware';
+import { createEmailService } from '../lib/email';
 
 const users = new Hono<{ Bindings: Env }>();
 
@@ -43,7 +44,7 @@ users.get('/me', requireAuth, async (c) => {
 });
 
 // Update profile
-users.patch('/me', requireAuth, async (c) => {
+users.patch('/me', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ name?: string; avatarUrl?: string }>();
 
@@ -76,7 +77,7 @@ users.patch('/me', requireAuth, async (c) => {
 });
 
 // Change email
-users.post('/me/email', requireAuth, rateLimit(3, 3600), async (c) => {
+users.post('/me/email', requireAuth, requireCSRF(), rateLimit(3, 3600), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ newEmail: string; password?: string }>();
 
@@ -122,7 +123,7 @@ users.post('/me/email', requireAuth, rateLimit(3, 3600), async (c) => {
 });
 
 // Set or change password
-users.post('/me/password', requireAuth, async (c) => {
+users.post('/me/password', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ currentPassword?: string; newPassword: string }>();
 
@@ -285,7 +286,7 @@ users.get('/me/audit-log', requireAuth, async (c) => {
 });
 
 // Delete account
-users.delete('/me', requireAuth, async (c) => {
+users.delete('/me', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json<{ password?: string; confirmation: string }>();
 
@@ -337,7 +338,7 @@ users.delete('/me', requireAuth, async (c) => {
   return c.json({ success: true, message: 'Account deleted' });
 });
 
-// Request email verification
+// Request email verification - sends verification link
 users.post('/me/verify-email', requireAuth, rateLimit(3, 300), async (c) => {
   const user = c.get('user');
 
@@ -361,10 +362,122 @@ users.post('/me/verify-email', requireAuth, rateLimit(3, 300), async (c) => {
     VALUES (?, ?, ?, ?)
   `).bind(generateId(), user.email, tokenHash, expiresAt).run();
 
-  // TODO: Send email
-  console.log(`Verification link for ${user.email}: /verify-email?token=${token}`);
+  // Build verification URL - use the current request's origin for the API endpoint
+  const requestUrl = new URL(c.req.url);
+  const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+  const verifyUrl = `${baseUrl}/users/verify-email?token=${token}`;
 
-  return c.json({ success: true, message: 'Verification email sent' });
+  // Send email via Resend
+  const emailService = createEmailService(c.env);
+  if (emailService) {
+    const result = await emailService.sendVerificationEmail(user.email, verifyUrl);
+    if (!result.success) {
+      console.error('Failed to send verification email:', result.error);
+      // Don't fail the request - token is created, they can retry
+      return c.json({ 
+        success: true, 
+        message: 'Verification email queued. If not received, please try again.',
+        warning: 'Email delivery may be delayed'
+      });
+    }
+    await logAudit(c.env.DB, 'user.verification_email.sent', user.id, c.req.raw);
+  } else {
+    // Development mode - log the link
+    console.log(`[DEV] Verification link for ${user.email}: ${verifyUrl}`);
+    return c.json({ 
+      success: true, 
+      message: 'Email service not configured. Check server logs for verification link.',
+      devMode: true
+    });
+  }
+
+  return c.json({ success: true, message: 'Verification email sent. Please check your inbox.' });
+});
+
+// Verify email with token (from email link)
+users.get('/verify-email', rateLimit(10, 300), async (c) => {
+  const token = c.req.query('token');
+  
+  if (!token) {
+    return c.json({ error: 'Verification token is required' }, 400);
+  }
+
+  // Hash the token to compare with stored hash
+  const tokenHash = await (async () => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(token);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  })();
+
+  // Find valid verification record
+  const record = await c.env.DB.prepare(`
+    SELECT id, email, expires_at, used FROM magic_links 
+    WHERE token_hash = ? AND used = 0
+  `).bind(tokenHash).first<{ id: string; email: string; expires_at: string; used: number }>();
+
+  if (!record) {
+    return c.json({ error: 'Invalid or expired verification link' }, 400);
+  }
+
+  // Check expiration
+  if (new Date(record.expires_at) < new Date()) {
+    return c.json({ error: 'Verification link has expired. Please request a new one.' }, 400);
+  }
+
+  // Find user by email
+  const user = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?')
+    .bind(record.email)
+    .first<{ id: string }>();
+
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+
+  // Mark email as verified
+  await c.env.DB.prepare(`
+    UPDATE users SET email_verified = 1, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(user.id).run();
+
+  // Mark token as used
+  await c.env.DB.prepare(`
+    UPDATE magic_links SET used = 1 WHERE id = ?
+  `).bind(record.id).run();
+
+  await logAudit(c.env.DB, 'user.email.verified', user.id, c.req.raw);
+
+  // Redirect to frontend with success
+  const frontendUrl = c.env.ALLOWED_ORIGINS?.split(',')[0] || 'http://localhost:5173';
+  return c.redirect(`${frontendUrl}/login?verified=true`);
+});
+
+// Demo: Instant email verification (for demo/development only)
+// SECURITY: This endpoint is disabled in production - use /me/verify-email for proper flow
+users.post('/me/verify-email-demo', requireAuth, async (c) => {
+  // Block in production
+  if (c.env.ENVIRONMENT === 'production') {
+    return c.json({ 
+      error: 'Not Available', 
+      message: 'Demo verification is disabled in production. Use email verification link.' 
+    }, 403);
+  }
+
+  const user = c.get('user');
+
+  if (user.email_verified) {
+    return c.json({ error: 'Email is already verified' }, 400);
+  }
+
+  // Directly mark email as verified (demo mode only)
+  await c.env.DB.prepare(`
+    UPDATE users SET email_verified = 1, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(user.id).run();
+
+  await logAudit(c.env.DB, 'user.email.verified.demo', user.id, c.req.raw);
+
+  return c.json({ success: true, message: 'Email verified (demo mode - development only)' });
 });
 
 export { users as usersRoutes };

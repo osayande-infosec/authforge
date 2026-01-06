@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { Shield, Mail, Lock, Eye, EyeOff, ArrowRight, Fingerprint } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { useAuthStore, authApi } from '../store';
 
 interface LoginForm {
@@ -64,8 +65,56 @@ export default function Login() {
   };
 
   const handlePasskeyLogin = async () => {
-    toast.error('Passkey login coming soon!');
-    // TODO: Implement passkey login
+    setIsLoading(true);
+    try {
+      // Start passkey authentication (no email required for discoverable credentials)
+      const startResponse = await authApi.passkeyAuthStart();
+      
+      console.log('Start response:', startResponse);
+      
+      if (!startResponse.success || !startResponse.options) {
+        throw new Error('Failed to start passkey authentication');
+      }
+
+      console.log('Options for startAuthentication:', startResponse.options);
+
+      // Prompt user to authenticate with passkey
+      // v10 API: pass options directly, not wrapped in { optionsJSON }
+      const credential = await startAuthentication(startResponse.options);
+
+      console.log('Credential from authenticator:', credential);
+
+      // Complete authentication
+      const completeResponse = await authApi.passkeyAuthComplete(
+        startResponse.challengeId,
+        credential
+      );
+
+      if (completeResponse.success && completeResponse.user && completeResponse.token) {
+        setUser(completeResponse.user);
+        setToken(completeResponse.token);
+        toast.success('Welcome back!');
+        navigate('/dashboard');
+      } else {
+        throw new Error('Authentication failed');
+      }
+    } catch (error) {
+      console.error('Passkey login error:', error);
+      if (error instanceof Error) {
+        // Handle specific WebAuthn errors
+        if (error.name === 'NotAllowedError') {
+          toast.error('Passkey authentication was cancelled');
+        } else if (error.name === 'NotFoundError') {
+          toast.error('No passkey found for this device');
+        } else {
+          toast.error(error.message || 'Passkey login failed');
+        }
+      } else {
+        toast.error('Passkey login failed');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

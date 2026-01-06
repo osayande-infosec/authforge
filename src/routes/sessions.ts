@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import { Env, Session } from '../types';
 import { sha256, logAudit } from '../lib/utils';
-import { requireAuth } from '../lib/middleware';
+import { requireAuth, generateCSRFToken, requireCSRF } from '../lib/middleware';
 
 const sessions = new Hono<{ Bindings: Env }>();
 
@@ -13,26 +13,37 @@ sessions.get('/', requireAuth, async (c) => {
   const currentSession = c.get('session');
 
   const result = await c.env.DB.prepare(`
-    SELECT id, device_info, ip_address, last_active_at, created_at
+    SELECT id, user_agent, device_name, ip_address, location, last_active_at, created_at
     FROM sessions 
     WHERE user_id = ? AND expires_at > datetime('now')
     ORDER BY last_active_at DESC
   `).bind(user.id).all<Session>();
 
   const sessionsData = result.results.map(s => {
-    let deviceInfo = { browser: 'Unknown', os: 'Unknown', device: 'Unknown' };
-    if (s.device_info) {
-      try {
-        deviceInfo = JSON.parse(s.device_info);
-      } catch {}
-    }
+    // Parse user agent for browser/OS info
+    const ua = s.user_agent || '';
+    let browser = 'Unknown';
+    let os = 'Unknown';
+    
+    // Simple UA parsing
+    if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Safari')) browser = 'Safari';
+    else if (ua.includes('Edge')) browser = 'Edge';
+    
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac')) os = 'macOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
 
     return {
       id: s.id,
-      browser: deviceInfo.browser,
-      os: deviceInfo.os,
-      device: deviceInfo.device,
+      browser,
+      os,
+      device: s.device_name || 'Unknown Device',
       ipAddress: s.ip_address,
+      location: s.location,
       lastActiveAt: s.last_active_at,
       createdAt: s.created_at,
       isCurrent: s.id === currentSession.id
@@ -46,8 +57,14 @@ sessions.get('/', requireAuth, async (c) => {
   });
 });
 
+// Get CSRF token for current session
+sessions.get('/csrf-token', requireAuth, async (c) => {
+  const csrfToken = await generateCSRFToken(c);
+  return c.json({ success: true, csrfToken });
+});
+
 // Revoke a specific session
-sessions.delete('/:id', requireAuth, async (c) => {
+sessions.delete('/:id', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const currentSession = c.get('session');
   const sessionId = c.req.param('id');
@@ -79,7 +96,7 @@ sessions.delete('/:id', requireAuth, async (c) => {
 });
 
 // Revoke all sessions except current
-sessions.post('/revoke-all', requireAuth, async (c) => {
+sessions.post('/revoke-all', requireAuth, requireCSRF(), async (c) => {
   const user = c.get('user');
   const currentSession = c.get('session');
 
@@ -113,12 +130,21 @@ sessions.get('/current', requireAuth, async (c) => {
   const session = c.get('session');
   const user = c.get('user');
 
-  let deviceInfo = { browser: 'Unknown', os: 'Unknown', device: 'Unknown' };
-  if (session.device_info) {
-    try {
-      deviceInfo = JSON.parse(session.device_info);
-    } catch {}
-  }
+  // Parse user agent for browser/OS info
+  const ua = session.user_agent || '';
+  let browser = 'Unknown';
+  let os = 'Unknown';
+  
+  if (ua.includes('Chrome')) browser = 'Chrome';
+  else if (ua.includes('Firefox')) browser = 'Firefox';
+  else if (ua.includes('Safari')) browser = 'Safari';
+  else if (ua.includes('Edge')) browser = 'Edge';
+  
+  if (ua.includes('Windows')) os = 'Windows';
+  else if (ua.includes('Mac')) os = 'macOS';
+  else if (ua.includes('Linux')) os = 'Linux';
+  else if (ua.includes('Android')) os = 'Android';
+  else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
 
   // Check 2FA status for this session
   const is2FAVerified = await c.env.SESSIONS.get(`2fa:${session.id}`);
@@ -127,9 +153,9 @@ sessions.get('/current', requireAuth, async (c) => {
     success: true,
     session: {
       id: session.id,
-      browser: deviceInfo.browser,
-      os: deviceInfo.os,
-      device: deviceInfo.device,
+      browser,
+      os,
+      device: session.device_name || 'Unknown Device',
       ipAddress: session.ip_address,
       lastActiveAt: session.last_active_at,
       createdAt: session.created_at,
@@ -142,6 +168,8 @@ sessions.get('/current', requireAuth, async (c) => {
       name: user.name,
       emailVerified: user.email_verified === 1,
       has2FA: user.totp_enabled === 1,
+      hasPassword: user.password_hash !== null,
+      hasVault: user.vault_key !== null,
       avatarUrl: user.avatar_url
     }
   });

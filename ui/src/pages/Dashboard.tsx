@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { Shield, Key, MonitorSmartphone, Lock, ArrowRight, Activity, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../store';
+import { useEffect } from 'react';
 
 const quickActions = [
   {
@@ -42,7 +43,12 @@ const colorClasses = {
 };
 
 export default function Dashboard() {
-  const { user } = useAuthStore();
+  const { user, refreshUser } = useAuthStore();
+
+  // Refresh user data on mount to get latest passkeys count, etc.
+  useEffect(() => {
+    refreshUser();
+  }, [refreshUser]);
 
   const securityScore = calculateSecurityScore(user);
 

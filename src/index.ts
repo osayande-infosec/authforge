@@ -9,6 +9,7 @@ import { logger } from 'hono/logger';
 import { authRoutes } from './routes/auth';
 import { passkeysRoutes } from './routes/passkeys';
 import { oauthRoutes } from './routes/oauth';
+import { oidcRoutes } from './routes/oidc';
 import { sessionsRoutes } from './routes/sessions';
 import { vaultRoutes } from './routes/vault';
 import { usersRoutes } from './routes/users';
@@ -95,6 +96,14 @@ app.get('/docs', (c) => {
         'PUT /users/me': 'Update profile',
         'DELETE /users/me': 'Delete account',
         'GET /users/audit-log': 'Get audit log',
+      },
+      oidc: {
+        'GET /.well-known/openid-configuration': 'OIDC Discovery (auto-configure SSO)',
+        'GET /oidc/authorize': 'Authorization endpoint',
+        'POST /oidc/token': 'Token endpoint',
+        'GET /oidc/userinfo': 'User info endpoint',
+        'GET /oidc/jwks': 'JSON Web Key Set',
+        'POST /oidc/register': 'Dynamic client registration',
       }
     }
   });
@@ -104,9 +113,13 @@ app.get('/docs', (c) => {
 app.route('/auth', authRoutes);
 app.route('/passkeys', passkeysRoutes);
 app.route('/oauth', oauthRoutes);
+app.route('/oidc', oidcRoutes);
 app.route('/sessions', sessionsRoutes);
 app.route('/vault', vaultRoutes);
 app.route('/users', usersRoutes);
+
+// OIDC Discovery at well-known path (required by spec)
+app.route('', oidcRoutes);
 
 // 404 handler
 app.notFound((c) => {

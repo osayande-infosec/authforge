@@ -39,11 +39,12 @@ interface AuthState {
   setToken: (token: string | null) => void;
   setLoading: (loading: boolean) => void;
   logout: () => void;
+  refreshUser: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
       isLoading: true,
@@ -52,7 +53,29 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user, isAuthenticated: !!user }),
       setToken: (token) => set({ token }),
       setLoading: (isLoading) => set({ isLoading }),
-      logout: () => set({ user: null, token: null, isAuthenticated: false })
+      logout: () => {
+        clearCSRFToken();
+        set({ user: null, token: null, isAuthenticated: false });
+      },
+      refreshUser: async () => {
+        const token = get().token;
+        if (!token) return;
+        try {
+          const response = await fetch(`${API_BASE}/users/me`, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            },
+            credentials: 'include'
+          });
+          if (response.ok) {
+            const data = await response.json();
+            set({ user: data.user, isAuthenticated: true });
+          }
+        } catch (error) {
+          console.error('Failed to refresh user:', error);
+        }
+      }
     }),
     {
       name: 'authforge-auth',
@@ -64,25 +87,92 @@ export const useAuthStore = create<AuthState>()(
 // API client
 const API_BASE = '/api';
 
+// CSRF token management
+let csrfToken: string | null = null;
+
+async function fetchCSRFToken(): Promise<string | null> {
+  const token = useAuthStore.getState().token;
+  if (!token) return null;
+  
+  try {
+    const response = await fetch(`${API_BASE}/sessions/csrf-token`, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      credentials: 'include'
+    });
+    if (response.ok) {
+      const data = await response.json();
+      csrfToken = data.csrfToken;
+      return csrfToken;
+    }
+  } catch (error) {
+    console.error('Failed to fetch CSRF token:', error);
+  }
+  return null;
+}
+
+// Get CSRF token, fetching if needed
+async function getCSRFToken(): Promise<string | null> {
+  if (csrfToken) return csrfToken;
+  return fetchCSRFToken();
+}
+
+// Clear CSRF token on logout
+export function clearCSRFToken() {
+  csrfToken = null;
+}
+
 export async function api<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const token = useAuthStore.getState().token;
+  const method = options.method?.toUpperCase() || 'GET';
+  
+  // For state-changing requests, include CSRF token
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> || {})
+  };
+
+  // Add CSRF token for mutations (POST, PUT, PATCH, DELETE)
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && token) {
+    const csrf = await getCSRFToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+  }
   
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers
-    },
+    headers,
     credentials: 'include'
   });
 
   const data = await response.json();
 
   if (!response.ok) {
+    // If CSRF token is invalid, refresh it and retry once
+    if (response.status === 403 && data.error?.includes('CSRF')) {
+      csrfToken = null;
+      const newCsrf = await fetchCSRFToken();
+      if (newCsrf) {
+        headers['X-CSRF-Token'] = newCsrf;
+        const retryResponse = await fetch(`${API_BASE}${endpoint}`, {
+          ...options,
+          headers,
+          credentials: 'include'
+        });
+        const retryData = await retryResponse.json();
+        if (!retryResponse.ok) {
+          throw new Error(retryData.error || 'An error occurred');
+        }
+        return retryData;
+      }
+    }
     throw new Error(data.error || 'An error occurred');
   }
 
@@ -145,6 +235,21 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify({ code })
     });
+  },
+
+  // Passkey authentication (for login)
+  async passkeyAuthStart(email?: string) {
+    return api<{ success: boolean; challengeId: string; options: any }>('/passkeys/authenticate/start', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+  },
+
+  async passkeyAuthComplete(challengeId: string, credential: any) {
+    return api<{ success: boolean; user: User; token: string }>('/passkeys/authenticate/complete', {
+      method: 'POST',
+      body: JSON.stringify({ challengeId, credential })
+    });
   }
 };
 
@@ -161,10 +266,14 @@ export const userApi = {
     });
   },
 
-  async changePassword(currentPassword: string, newPassword: string) {
+  async changePassword(currentPassword: string | undefined, newPassword: string) {
+    const body: { newPassword: string; currentPassword?: string } = { newPassword };
+    if (currentPassword) {
+      body.currentPassword = currentPassword;
+    }
     return api<{ message: string }>('/users/me/password', {
       method: 'POST',
-      body: JSON.stringify({ currentPassword, newPassword })
+      body: JSON.stringify(body)
     });
   },
 
@@ -178,6 +287,20 @@ export const userApi = {
     return api<{ message: string }>('/users/me', {
       method: 'DELETE',
       body: JSON.stringify({ password, confirmation })
+    });
+  },
+
+  // Request email verification - sends link to email (check console in dev mode)
+  async requestEmailVerification() {
+    return api<{ success: boolean; message: string; devMode?: boolean }>('/users/me/verify-email', {
+      method: 'POST'
+    });
+  },
+
+  // Demo mode only - instant verification (disabled in production)
+  async verifyEmailDemo() {
+    return api<{ message: string }>('/users/me/verify-email-demo', {
+      method: 'POST'
     });
   }
 };

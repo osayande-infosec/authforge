@@ -3,45 +3,38 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Cloudflare D1 Database
 [[d1_databases]]
 binding = "DB"
 database_name = "authforge-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "90c666a0-b337-4bfe-8c42-476a10c8d4df"
 
-# Cloudflare KV for sessions & rate limiting
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "e83f64073d5840c4847d272ad1ec3479"
+preview_id = "9cc59429dd614bc08e464cbf238ba690"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "YOUR_RATE_LIMIT_KV_ID"
-
-# Environment variables (set via wrangler secret)
-# JWT_SECRET - for signing tokens
-# WEBAUTHN_RP_ID - your domain (e.g., authforge.cyberguardng.ca)
-# WEBAUTHN_RP_NAME - AuthForge
-# GOOGLE_CLIENT_ID - for OAuth
-# GOOGLE_CLIENT_SECRET - for OAuth
-# SMTP_HOST - for magic links
-# SMTP_USER
-# SMTP_PASS
-# SMTP_FROM
+id = "93d9464af19a4904875b04c2713fad9a"
+preview_id = "fc033b32b0c849559657e59810b93423"
 
 [vars]
 WEBAUTHN_RP_NAME = "AuthForge"
-ALLOWED_ORIGINS = "http://localhost:5173,https://authforge.cyberguardng.ca"
+WEBAUTHN_RP_ID = "localhost"
+ALLOWED_ORIGINS = "http://localhost:3002,http://localhost:3000,http://localhost:3003,http://localhost:3004,http://localhost:5173,http://127.0.0.1:8787"
+# Email (set via Cloudflare Dashboard secrets in production)
+# RESEND_API_KEY = "re_xxxxxxxxxxxx" (set as secret)
+EMAIL_FROM = "AuthForge <noreply@authforge.dev>"
 
-# Routes - serve API from /api/*
-# [[routes]]
-# pattern = "authforge.cyberguardng.ca/api/*"
-# zone_name = "cyberguardng.ca"
-
-# Development
 [dev]
 port = 8787
 
-# Production environment
 [env.production]
-vars = { ENVIRONMENT = "production" }
+vars = { ENVIRONMENT = "production", EMAIL_FROM = "AuthForge <noreply@authforge.dev>" }
+# Secrets to set in Cloudflare Dashboard:
+# - JWT_SECRET
+# - RESEND_API_KEY
+# - GOOGLE_CLIENT_ID (optional)
+# - GOOGLE_CLIENT_SECRET (optional)
+# - GITHUB_CLIENT_ID (optional)
+# - GITHUB_CLIENT_SECRET (optional)

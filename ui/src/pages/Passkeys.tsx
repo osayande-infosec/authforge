@@ -1,21 +1,90 @@
 import { motion } from 'framer-motion';
-import { Key, Plus, Fingerprint } from 'lucide-react';
-import { useState } from 'react';
+import { Key, Plus, Fingerprint, Trash2, Shield, Smartphone } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
+import { startRegistration } from '@simplewebauthn/browser';
+import { api } from '../store';
+
+interface Passkey {
+  id: string;
+  name: string;
+  deviceType: string;
+  backedUp: boolean;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
 
 export default function Passkeys() {
-  const [passkeys] = useState([]);
+  const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [_isLoading, setIsLoading] = useState(true);
+
+  const fetchPasskeys = async () => {
+    try {
+      const data = await api<{ passkeys: Passkey[] }>('/passkeys');
+      setPasskeys(data.passkeys);
+    } catch (error) {
+      console.error('Failed to fetch passkeys:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPasskeys();
+  }, []);
 
   const handleRegister = async () => {
     setIsRegistering(true);
     try {
-      // TODO: Implement WebAuthn registration
-      toast.error('Passkey registration coming soon!');
-    } catch (error) {
-      toast.error('Failed to register passkey');
+      // Start registration - get challenge from server
+      const startData = await api<{ challengeId: string; options: any }>('/passkeys/register/start', {
+        method: 'POST'
+      });
+
+      console.log('WebAuthn options:', startData.options);
+
+      // Prompt user to create passkey using browser API
+      // The options object should be passed directly, not wrapped in optionsJSON
+      const credential = await startRegistration(startData.options);
+
+      // Complete registration on server
+      const name = prompt('Give this passkey a name:', `Passkey ${new Date().toLocaleDateString()}`);
+      
+      await api('/passkeys/register/complete', {
+        method: 'POST',
+        body: JSON.stringify({
+          challengeId: startData.challengeId,
+          credential,
+          name: name || undefined
+        })
+      });
+
+      toast.success('Passkey registered successfully!');
+      fetchPasskeys();
+    } catch (error: any) {
+      console.error('Passkey error:', error);
+      if (error.name === 'NotAllowedError') {
+        toast.error('Passkey registration was cancelled');
+      } else if (error.name === 'InvalidStateError') {
+        toast.error('This passkey is already registered');
+      } else {
+        toast.error(error.message || 'Failed to register passkey');
+      }
     } finally {
       setIsRegistering(false);
+    }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
+    
+    try {
+      await api(`/passkeys/${id}`, { method: 'DELETE' });
+      toast.success('Passkey deleted');
+      setPasskeys(passkeys.filter(p => p.id !== id));
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to delete passkey');
     }
   };
 
@@ -86,14 +155,39 @@ export default function Passkeys() {
             <p className="text-dark-400 text-sm mb-4">
               Add a passkey to enable passwordless sign-in
             </p>
-            <button onClick={handleRegister} className="btn-primary">
+            <button onClick={handleRegister} disabled={isRegistering} className="btn-primary">
               <Plus className="w-5 h-5" />
               Register Passkey
             </button>
           </div>
         ) : (
           <div className="space-y-3">
-            {/* Passkey items would go here */}
+            {passkeys.map((passkey) => (
+              <div key={passkey.id} className="flex items-center justify-between p-4 bg-dark-800/50 rounded-xl">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-primary-500/10 flex items-center justify-center">
+                    {passkey.deviceType === 'platform' ? (
+                      <Smartphone className="w-5 h-5 text-primary-400" />
+                    ) : (
+                      <Shield className="w-5 h-5 text-primary-400" />
+                    )}
+                  </div>
+                  <div>
+                    <h4 className="text-white font-medium">{passkey.name}</h4>
+                    <p className="text-dark-400 text-sm">
+                      Added {new Date(passkey.createdAt).toLocaleDateString()}
+                      {passkey.lastUsedAt && ` • Last used ${new Date(passkey.lastUsedAt).toLocaleDateString()}`}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(passkey.id, passkey.name)}
+                  className="p-2 text-dark-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </motion.div>
