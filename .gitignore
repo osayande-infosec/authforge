@@ -1,5 +1,10 @@
-node_modules.wrangler
+node_modules
+.wrangler
 .dev.vars
 *.local
 dist
 .env
+
+# Internal demo scripts
+*_DEMO_SCRIPT.md
+DEMO_SCRIPT.md
